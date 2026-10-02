@@ -1,0 +1,24 @@
+# Dependencies
+node_modules/
+
+# Env (secrets — never commit)
+.env
+.env.*.local
+
+# Uploads (runtime files, Cloudinary is the source of truth)
+uploads/*
+!uploads/.gitkeep
+
+# Logs
+*.log
+npm-debug.log*
+logs/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+
+# Misc
+coverage/
+.nyc_output/
