@@ -6,6 +6,17 @@ const { upload, uploadToCloudinary } = require('../middleware/upload');
 
 const router = express.Router();
 
+// Products may only live on final (leaf) categories — a category that has
+// sub-categories of its own cannot hold products directly.
+async function assertLeafCategory(categoryId) {
+  const kids = await Category.countDocuments({ parent: categoryId });
+  if (kids > 0) {
+    const err = new Error('Products can only be added to the last/final sub-category (one with no sub-categories under it).');
+    err.statusCode = 400;
+    throw err;
+  }
+}
+
 // Universal search - must be before /:slug
 // Matches product name/description/tags AND category/sub-category names
 router.get('/search/query', async (req, res) => {
@@ -132,6 +143,11 @@ router.post('/', protect, adminOnly, upload.array('imageFiles', 5), async (req, 
       if (!cat) return res.status(400).json({ message: 'Category not found' });
       categoryId = cat._id;
     }
+    try {
+      await assertLeafCategory(categoryId);
+    } catch (e) {
+      return res.status(e.statusCode || 400).json({ message: e.message });
+    }
 
     // Handle images: from JSON array OR uploaded files via Cloudinary
     let imageUrls = [];
@@ -192,6 +208,19 @@ router.put('/:id', protect, adminOnly, upload.array('imageFiles', 5), async (req
     if (update.category && !update.category.match(/^[0-9a-fA-F]{24}$/)) {
       const cat = await Category.findOne({ slug: update.category });
       if (cat) update.category = cat._id;
+    }
+    if (update.category) {
+      // Leaf rule applies when (re)assigning a category — existing products
+      // already sitting on a non-leaf category can still be edited otherwise.
+      const existing = await Product.findById(req.params.id).select('category');
+      if (!existing) return res.status(404).json({ message: 'Not found' });
+      if (String(existing.category) !== String(update.category)) {
+        try {
+          await assertLeafCategory(update.category);
+        } catch (e) {
+          return res.status(e.statusCode || 400).json({ message: e.message });
+        }
+      }
     }
     // Handle images/files if provided
     if (req.files && req.files.length > 0) {

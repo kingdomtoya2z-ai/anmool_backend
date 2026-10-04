@@ -6,6 +6,41 @@ const { upload, uploadToCloudinary } = require('../middleware/upload');
 
 const router = express.Router();
 
+// ---------- tree helpers (unlimited depth) ----------
+const idStr = (v) => String(v || '');
+async function getChildIds(parentId) {
+  const kids = await Category.find({ parent: parentId }).select('_id');
+  return kids.map((k) => String(k._id));
+}
+async function getDescendantIds(parentId) {
+  const all = await Category.find().select('_id parent');
+  const ids = [];
+  let frontier = [idStr(parentId)];
+  let guard = 0;
+  while (frontier.length && guard++ < 1000) {
+    const next = [];
+    for (const c of all) {
+      if (frontier.includes(idStr(c.parent)) && !ids.includes(idStr(c._id))) {
+        ids.push(idStr(c._id));
+        next.push(idStr(c._id));
+      }
+    }
+    frontier = next;
+  }
+  return ids;
+}
+async function isLeafCategory(categoryId) {
+  const n = await Category.countDocuments({ parent: categoryId });
+  return n === 0;
+}
+// true if assigning newParentId as parent of categoryId would create a cycle
+async function wouldCreateCycle(categoryId, newParentId) {
+  if (!newParentId) return false;
+  if (idStr(categoryId) === idStr(newParentId)) return true;
+  const desc = await getDescendantIds(categoryId);
+  return desc.includes(idStr(newParentId));
+}
+
 // Public: list categories with product counts optional
 router.get('/', async (req, res) => {
   try {
@@ -73,12 +108,27 @@ router.post('/', protect, adminOnly, upload.single('imageFile'), async (req, res
 });
 
 // Admin: update - also supports file upload
+// Changing parent is validated: no self-parenting, no cycles (can't move a
+// category under one of its own descendants at any depth).
 router.put('/:id', protect, adminOnly, upload.single('imageFile'), async (req, res) => {
   try {
     const update = { ...req.body };
     if (req.file) {
       const result = await uploadToCloudinary(req.file.buffer, { folder: 'anmool-dairy/categories' });
       update.image = result.secure_url;
+    }
+    if (update.parent !== undefined) {
+      const newParentId = update.parent || null;
+      if (newParentId) {
+        const parentCat = await Category.findById(newParentId);
+        if (!parentCat) return res.status(400).json({ message: 'Parent category not found' });
+        update.parent = parentCat._id;
+      } else {
+        update.parent = null;
+      }
+      if (await wouldCreateCycle(req.params.id, update.parent)) {
+        return res.status(400).json({ message: 'Cannot move a category under itself or its own sub-category' });
+      }
     }
     const category = await Category.findByIdAndUpdate(req.params.id, update, { new: true });
     if (!category) return res.status(404).json({ message: 'Not found' });
@@ -88,12 +138,23 @@ router.put('/:id', protect, adminOnly, upload.single('imageFile'), async (req, r
   }
 });
 
-// Admin: delete — children sub-categories move to top level so nothing orphans
+// Admin: delete — blocked when the category subtree holds products (products
+// live only on final/leaf categories, so move/delete them first). Otherwise
+// direct children are re-attached to the deleted node's own parent so the
+// tree stays intact at any depth.
 router.delete('/:id', protect, adminOnly, async (req, res) => {
   try {
-    const cat = await Category.findByIdAndDelete(req.params.id);
+    const cat = await Category.findById(req.params.id);
     if (!cat) return res.status(404).json({ message: 'Not found' });
-    await Category.updateMany({ parent: cat._id }, { $set: { parent: null } });
+    const subtreeIds = [String(cat._id), ...(await getDescendantIds(cat._id))];
+    const productCount = await Product.countDocuments({ category: { $in: subtreeIds } });
+    if (productCount > 0) {
+      return res.status(400).json({
+        message: `Cannot delete — ${productCount} product(s) live under "${cat.name}" (or its sub-categories). Move or delete those products first.`,
+      });
+    }
+    await Category.findByIdAndDelete(req.params.id);
+    await Category.updateMany({ parent: cat._id }, { $set: { parent: cat.parent || null } });
     res.json({ message: 'Category deleted' });
   } catch (err) {
     res.status(500).json({ message: err.message });
