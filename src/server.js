@@ -40,7 +40,7 @@ const allowedOrigins = new Set([...(envOrigins.length ? envOrigins : ['http://lo
 for (const o of ['https://localhost', 'http://localhost', 'capacitor://localhost']) allowedOrigins.add(o);
 // Deployed website origin (Railway). Kept in code so the production frontend
 // works even if FRONTEND_URL env is missing it.
-for (const o of ['https://anmoolfrontend-production.up.railway.app']) allowedOrigins.add(o);
+for (const o of ['https://anmoolfrontend-production.up.railway.app', 'https://www.anmooldairy.com', 'https://anmooldairy.com']) allowedOrigins.add(o);
 app.use(
   cors({
     origin: (origin, cb) => {
