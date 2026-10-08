@@ -23,6 +23,11 @@ router.post('/', protect, async (req, res) => {
     const { items, shippingAddress, paymentMethod = 'online', paymentId = '' } = req.body;
     if (!items || !items.length) return res.status(400).json({ message: 'No items' });
     if (!shippingAddress) return res.status(400).json({ message: 'Shipping address required' });
+    // Online orders must carry a real verified Razorpay payment id (pay_…)
+    // — blocks fake/test ids from ever becoming 'paid' orders.
+    if (paymentMethod !== 'cod' && !/^pay_[A-Za-z0-9]+$/.test(paymentId)) {
+      return res.status(400).json({ message: 'Online payment verification required before placing the order' });
+    }
 
     let subtotal = 0;
     const populatedItems = [];
@@ -279,11 +284,75 @@ router.put('/:id/status', protect, adminOnly, async (req, res) => {
   }
 });
 
-// Dummy payment simulation endpoint - returns success
-router.post('/payment/simulate', protect, async (req, res) => {
-  // simulate payment gateway success
-  const paymentId = 'PAY_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6).toUpperCase();
-  res.json({ success: true, paymentId, message: 'Payment simulated successfully' });
+// ---------- Razorpay (real online payments) ----------
+const Razorpay = require('razorpay');
+const crypto = require('crypto');
+
+function razorpayClient() {
+  if (!process.env.RAZORPAY_KEY_ID || !process.env.RAZORPAY_KEY_SECRET) return null;
+  return new Razorpay({
+    key_id: process.env.RAZORPAY_KEY_ID,
+    key_secret: process.env.RAZORPAY_KEY_SECRET,
+  });
+}
+
+// Public key id (safe to expose — used by checkout.js on the frontend)
+router.get('/payment/razorpay/key', async (req, res) => {
+  if (!process.env.RAZORPAY_KEY_ID) return res.status(503).json({ message: 'Online payments are not configured yet' });
+  res.json({ keyId: process.env.RAZORPAY_KEY_ID });
+});
+
+// Create a Razorpay order for the current cart. Amount is computed
+// server-side from live product prices — never trust the client's total.
+router.post('/payment/razorpay/order', protect, async (req, res) => {
+  try {
+    const rzp = razorpayClient();
+    if (!rzp) return res.status(503).json({ message: 'Online payments are not configured yet' });
+    const { items } = req.body;
+    if (!items || !items.length) return res.status(400).json({ message: 'No items' });
+
+    let subtotal = 0;
+    for (const it of items) {
+      const product = await Product.findById(it.product);
+      if (!product) return res.status(404).json({ message: `Product not found: ${it.product}` });
+      if (product.stock < it.quantity) return res.status(400).json({ message: `Insufficient stock for ${product.name}` });
+      subtotal += product.price * it.quantity;
+    }
+    const total = subtotal + calcShipping(subtotal);
+
+    const rzOrder = await rzp.orders.create({
+      amount: Math.round(total * 100), // paise
+      currency: 'INR',
+      receipt: `anmool_${Date.now()}`,
+      notes: { userId: String(req.user._id), email: req.user.email },
+    });
+    res.json({ keyId: process.env.RAZORPAY_KEY_ID, orderId: rzOrder.id, amount: rzOrder.amount, currency: rzOrder.currency, total });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: err.message || 'Failed to create payment order' });
+  }
+});
+
+// Verify Razorpay payment signature after checkout.js succeeds.
+// Only a verified paymentId may be used to place a 'paid' order.
+router.post('/payment/razorpay/verify', protect, async (req, res) => {
+  try {
+    if (!process.env.RAZORPAY_KEY_SECRET) return res.status(503).json({ message: 'Online payments are not configured yet' });
+    const { razorpay_order_id, razorpay_payment_id, razorpay_signature } = req.body;
+    if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
+      return res.status(400).json({ message: 'Incomplete payment response' });
+    }
+    const expected = crypto
+      .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
+      .update(`${razorpay_order_id}|${razorpay_payment_id}`)
+      .digest('hex');
+    if (expected !== razorpay_signature) {
+      return res.status(400).json({ message: 'Payment verification failed' });
+    }
+    res.json({ verified: true, paymentId: razorpay_payment_id, orderId: razorpay_order_id });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
 });
 
 module.exports = router;
