@@ -44,7 +44,14 @@ async function wouldCreateCycle(categoryId, newParentId) {
 // Public: list categories with product counts optional
 router.get('/', async (req, res) => {
   try {
-    const categories = await Category.find().populate('parent', 'name slug').sort({ createdAt: 1 });
+    const categories = await Category.find()
+      .populate('parent', 'name slug')
+      .populate({
+        path: 'homepageProducts',
+        select: 'name slug price comparePrice images stock unit weight isActive',
+        populate: { path: 'category', select: 'name slug' },
+      })
+      .sort({ createdAt: 1 });
     // Attach live product counts per category
     const counts = await Product.aggregate([
       { $group: { _id: '$category', count: { $sum: 1 } } },
@@ -133,6 +140,39 @@ router.put('/:id', protect, adminOnly, upload.single('imageFile'), async (req, r
     const category = await Category.findByIdAndUpdate(req.params.id, update, { new: true });
     if (!category) return res.status(404).json({ message: 'Not found' });
     res.json(category);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// Admin: set this category's homepage picks (ordered product ids, max 8).
+// Products must belong to this category's own subtree (category-wise picks).
+router.put('/:id/homepage-products', protect, adminOnly, async (req, res) => {
+  try {
+    const cat = await Category.findById(req.params.id);
+    if (!cat) return res.status(404).json({ message: 'Category not found' });
+    let ids = req.body.productIds || req.body.ids || [];
+    if (!Array.isArray(ids)) return res.status(400).json({ message: 'productIds must be an array' });
+    ids = [...new Set(ids.map(String))].slice(0, 8);
+    if (ids.length) {
+      const subtree = [String(cat._id), ...(await getDescendantIds(cat._id))];
+      const found = await Product.find({ _id: { $in: ids } }).select('_id category');
+      if (found.length !== ids.length) {
+        return res.status(400).json({ message: 'One or more products not found' });
+      }
+      const outsiders = found.filter((p) => !subtree.includes(String(p.category)));
+      if (outsiders.length) {
+        return res.status(400).json({ message: 'Homepage picks must be products of this category (or its sub-categories)' });
+      }
+    }
+    cat.homepageProducts = ids;
+    await cat.save();
+    const populated = await Category.findById(cat._id).populate({
+      path: 'homepageProducts',
+      select: 'name slug price comparePrice images stock unit weight isActive',
+      populate: { path: 'category', select: 'name slug' },
+    });
+    res.json(populated);
   } catch (err) {
     res.status(500).json({ message: err.message });
   }

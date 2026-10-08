@@ -8,6 +8,9 @@ const categorySchema = new mongoose.Schema(
     description: { type: String, default: '' },
     image: { type: String, default: '' },
     parent: { type: mongoose.Schema.Types.ObjectId, ref: 'Category', default: null },
+    // Admin-picked products shown in this category's homepage section
+    // (ordered). Empty = auto-fill with latest products.
+    homepageProducts: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Product' }],
   },
   { timestamps: true }
 );
