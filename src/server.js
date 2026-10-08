@@ -38,9 +38,12 @@ const allowedOrigins = new Set([...(envOrigins.length ? envOrigins : ['http://lo
 // loopback-only origins (can only come from the user's own device), safe to
 // allow in every environment including production.
 for (const o of ['https://localhost', 'http://localhost', 'capacitor://localhost']) allowedOrigins.add(o);
-// Deployed website origin (Railway). Kept in code so the production frontend
-// works even if FRONTEND_URL env is missing it.
+// Deployed website origins (Railway + custom domain). Kept in code so the
+// production frontends work even if FRONTEND_URL env is missing them.
 for (const o of ['https://anmoolfrontend-production.up.railway.app', 'https://www.anmooldairy.com', 'https://anmooldairy.com']) allowedOrigins.add(o);
+// Local development frontends — loopback only, safe to allow in every env so
+// `npm run dev` works without touching Railway env vars.
+for (const o of ['http://localhost:3000', 'http://localhost:3001', 'http://127.0.0.1:3000', 'http://127.0.0.1:3001']) allowedOrigins.add(o);
 app.use(
   cors({
     origin: (origin, cb) => {
