@@ -7,9 +7,12 @@ if (process.env.RESEND_API_KEY) {
 
 /**
  * Send email via Resend
- * @param {Object} opts - { to, subject, html, text, from }
+ * Replies go to RESEND_REPLY_TO (default: anmooldairy07@gmail.com) so customer
+ * replies land in the store inbox. Note: Resend only allows FROM addresses on
+ * verified domains — a gmail address can NEVER be the sender, only reply-to.
+ * @param {Object} opts - { to, subject, html, text, from, replyTo }
  */
-const sendEmail = async ({ to, subject, html, text, from }) => {
+const sendEmail = async ({ to, subject, html, text, from, replyTo }) => {
   const fallbackLog = () => {
     console.log('==== EMAIL (SIMULATED - Resend not configured) ====');
     console.log(`To: ${to}`);
@@ -27,6 +30,7 @@ const sendEmail = async ({ to, subject, html, text, from }) => {
 
   const emailFrom = from || process.env.RESEND_FROM || process.env.EMAIL_FROM || 'Anmool Dairy <onboarding@resend.dev>';
   // Resend requires verified domain for FROM; onboarding@resend.dev works for testing to verified email
+  const emailReplyTo = replyTo || process.env.RESEND_REPLY_TO || 'anmooldairy07@gmail.com';
 
   try {
     const { data, error } = await resend.emails.send({
@@ -35,6 +39,7 @@ const sendEmail = async ({ to, subject, html, text, from }) => {
       subject,
       html: html || `<p>${text || ''}</p>`,
       text: text || undefined,
+      reply_to: emailReplyTo,
     });
 
     if (error) {

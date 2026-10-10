@@ -5,6 +5,8 @@ const { nextOrderNumber } = require('../models/Order');
 const Product = require('../models/Product');
 const { protect, adminOnly } = require('../middleware/auth');
 const sendEmail = require('../utils/sendEmail');
+const Coupon = require('../models/Coupon');
+const { validateCoupon } = require('../utils/coupon');
 
 const router = express.Router();
 
@@ -20,7 +22,7 @@ router.post('/', protect, async (req, res) => {
   try {
     if (req.user.role === 'admin') return res.status(403).json({ message: 'Admin cannot place orders' });
 
-    const { items, shippingAddress, paymentMethod = 'online', paymentId = '' } = req.body;
+    const { items, shippingAddress, paymentMethod = 'online', paymentId = '', couponCode = '' } = req.body;
     if (!items || !items.length) return res.status(400).json({ message: 'No items' });
     if (!shippingAddress) return res.status(400).json({ message: 'Shipping address required' });
     // Online orders must carry a real verified Razorpay payment id (pay_…)
@@ -47,7 +49,20 @@ router.post('/', protect, async (req, res) => {
     }
 
     const shippingCharge = calcShipping(subtotal);
-    const total = subtotal + shippingCharge;
+
+    // Coupon discount — always re-validated server-side, never trusted from client
+    let appliedCoupon = '';
+    let discountAmount = 0;
+    if (couponCode && String(couponCode).trim()) {
+      try {
+        const r = await validateCoupon(couponCode, items);
+        appliedCoupon = r.coupon.code;
+        discountAmount = r.discount;
+      } catch (e) {
+        return res.status(e.status || 400).json({ message: e.message });
+      }
+    }
+    const total = subtotal - discountAmount + shippingCharge;
 
     const initialStatus = paymentMethod === 'cod' ? 'pending' : 'confirmed';
     const orderNumber = await nextOrderNumber();
@@ -58,6 +73,8 @@ router.post('/', protect, async (req, res) => {
       shippingAddress,
       subtotal,
       shippingCharge,
+      couponCode: appliedCoupon,
+      discountAmount,
       total,
       paymentMethod,
       paymentStatus: paymentMethod === 'cod' ? 'pending' : 'paid',
@@ -76,6 +93,10 @@ router.post('/', protect, async (req, res) => {
     for (const it of populatedItems) {
       await Product.findByIdAndUpdate(it.product, { $inc: { stock: -it.quantity } });
     }
+    // count coupon usage
+    if (appliedCoupon) {
+      await Coupon.updateOne({ code: appliedCoupon }, { $inc: { usedCount: 1 } });
+    }
 
     // Notify admin via email
     const adminEmail = process.env.ADMIN_NOTIFY_EMAIL || process.env.ADMIN_EMAIL;
@@ -89,6 +110,7 @@ router.post('/', protect, async (req, res) => {
         ${populatedItems.map((i) => `<li>${i.name} x ${i.quantity} = ₹${i.price * i.quantity}</li>`).join('')}
       </ul>
       <p><strong>Subtotal:</strong> ₹${subtotal}</p>
+      ${discountAmount ? `<p><strong>Coupon ${appliedCoupon}:</strong> −₹${discountAmount}</p>` : ''}
       <p><strong>Shipping:</strong> ₹${shippingCharge} ${shippingCharge ? '(Applied - order < ₹300)' : '(Free shipping)'}</p>
       <p><strong>Total Paid:</strong> ₹${total}</p>
       <p><strong>Payment:</strong> ${paymentMethod} - ${order.paymentId || 'N/A'}</p>
@@ -308,7 +330,7 @@ router.post('/payment/razorpay/order', protect, async (req, res) => {
   try {
     const rzp = razorpayClient();
     if (!rzp) return res.status(503).json({ message: 'Online payments are not configured yet' });
-    const { items } = req.body;
+    const { items, couponCode = '' } = req.body;
     if (!items || !items.length) return res.status(400).json({ message: 'No items' });
 
     let subtotal = 0;
@@ -318,7 +340,15 @@ router.post('/payment/razorpay/order', protect, async (req, res) => {
       if (product.stock < it.quantity) return res.status(400).json({ message: `Insufficient stock for ${product.name}` });
       subtotal += product.price * it.quantity;
     }
-    const total = subtotal + calcShipping(subtotal);
+    let discountAmount = 0;
+    if (couponCode && String(couponCode).trim()) {
+      try {
+        discountAmount = (await validateCoupon(couponCode, items)).discount;
+      } catch (e) {
+        return res.status(e.status || 400).json({ message: e.message });
+      }
+    }
+    const total = subtotal - discountAmount + calcShipping(subtotal);
 
     const rzOrder = await rzp.orders.create({
       amount: Math.round(total * 100), // paise

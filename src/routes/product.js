@@ -1,4 +1,5 @@
 const express = require('express');
+const sanitizeHtml = require('sanitize-html');
 const Product = require('../models/Product');
 const Category = require('../models/Category');
 const { protect, adminOnly } = require('../middleware/auth');
@@ -6,9 +7,18 @@ const { upload, uploadToCloudinary } = require('../middleware/upload');
 
 const router = express.Router();
 
-// Products may only live on final (leaf) categories — a category that has
-// sub-categories of its own cannot hold products directly.
+// Admin-written HTML (lists, bold, links…) is allowed in descriptions but
+// scrubbed: no scripts, iframes, forms or event-handler attributes.
+function cleanDescHtml(v) {
+  if (typeof v !== 'string') return v;
+  return sanitizeHtml(v, {
+    allowedTags: sanitizeHtml.defaults.allowedTags.concat(['h1', 'h2', 'h3', 'h4', 'u', 'ol', 'ul', 'li', 'p', 'br', 'span', 'div', 'blockquote']),
+    allowedAttributes: { a: ['href', 'title', 'target', 'rel'], '*': ['class'] },
+  });
+}
 async function assertLeafCategory(categoryId) {
+  // Products may only live on final (leaf) categories — a category that has
+  // sub-categories of its own cannot hold products directly.
   const kids = await Category.countDocuments({ parent: categoryId });
   if (kids > 0) {
     const err = new Error('Products can only be added to the last/final sub-category (one with no sub-categories under it).');
@@ -182,8 +192,8 @@ router.post('/', protect, adminOnly, upload.array('imageFiles', 5), async (req, 
 
     const product = await Product.create({
       name,
-      description,
-      shortDescription,
+      description: cleanDescHtml(description),
+      shortDescription: cleanDescHtml(shortDescription),
       price,
       comparePrice: comparePrice ? Number(comparePrice) : null,
       category: categoryId,
@@ -205,6 +215,8 @@ router.post('/', protect, adminOnly, upload.array('imageFiles', 5), async (req, 
 router.put('/:id', protect, adminOnly, upload.array('imageFiles', 5), async (req, res) => {
   try {
     let update = { ...req.body };
+    if (typeof update.description === 'string') update.description = cleanDescHtml(update.description);
+    if (typeof update.shortDescription === 'string') update.shortDescription = cleanDescHtml(update.shortDescription);
     if (update.category && !update.category.match(/^[0-9a-fA-F]{24}$/)) {
       const cat = await Category.findOne({ slug: update.category });
       if (cat) update.category = cat._id;
