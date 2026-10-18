@@ -12,6 +12,7 @@ const adminRoutes = require('./routes/admin');
 const uploadRoutes = require('./routes/upload');
 const bannerRoutes = require('./routes/banner');
 const couponRoutes = require('./routes/coupon');
+const reviewRoutes = require('./routes/review');
 
 const app = express();
 
@@ -68,7 +69,7 @@ app.get('/', (req, res) => {
     version: '1.0.0',
     email: 'Resend',
     imageUpload: 'Cloudinary',
-    endpoints: ['/api/auth', '/api/categories', '/api/products', '/api/orders', '/api/admin', '/api/upload', '/api/banners'],
+    endpoints: ['/api/auth', '/api/categories', '/api/products', '/api/orders', '/api/admin', '/api/upload', '/api/banners', '/api/coupons', '/api/reviews'],
   });
 });
 
@@ -82,6 +83,7 @@ app.use('/api/admin', adminRoutes);
 app.use('/api/upload', uploadRoutes);
 app.use('/api/banners', bannerRoutes);
 app.use('/api/coupons', couponRoutes);
+app.use('/api/reviews', reviewRoutes);
 
 // Universal search: token-based matching across product fields AND the
 // full category tree (a matching parent also returns products in all its
