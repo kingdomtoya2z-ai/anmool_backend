@@ -11,7 +11,7 @@ const { validateCoupon } = require('../utils/coupon');
 const router = express.Router();
 
 // helper: calculate shipping
-const SHIPPING_THRESHOLD = 300;
+const SHIPPING_THRESHOLD = 400;
 const SHIPPING_CHARGE = 100;
 function calcShipping(subtotal) {
   return subtotal < SHIPPING_THRESHOLD ? SHIPPING_CHARGE : 0;
@@ -111,7 +111,7 @@ router.post('/', protect, async (req, res) => {
       </ul>
       <p><strong>Subtotal:</strong> ₹${subtotal}</p>
       ${discountAmount ? `<p><strong>Coupon ${appliedCoupon}:</strong> −₹${discountAmount}</p>` : ''}
-      <p><strong>Shipping:</strong> ₹${shippingCharge} ${shippingCharge ? '(Applied - order < ₹300)' : '(Free shipping)'}</p>
+      <p><strong>Shipping:</strong> ₹${shippingCharge} ${shippingCharge ? `(Applied - order < ₹${SHIPPING_THRESHOLD})` : '(Free shipping)'}</p>
       <p><strong>Total Paid:</strong> ₹${total}</p>
       <p><strong>Payment:</strong> ${paymentMethod} - ${order.paymentId || 'N/A'}</p>
     `;
