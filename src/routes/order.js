@@ -12,9 +12,33 @@ const router = express.Router();
 
 // helper: calculate shipping
 const SHIPPING_THRESHOLD = 400;
-const SHIPPING_CHARGE = 100;
-function calcShipping(subtotal) {
-  return subtotal < SHIPPING_THRESHOLD ? SHIPPING_CHARGE : 0;
+const LIGHT_ITEM_SHIPPING = 60; // products under 1kg
+const HEAVY_ITEM_SHIPPING = 100; // products 1kg and above
+
+/** Read a product's weight (e.g. "500g", "1.5 kg", "1kg") as kilograms. */
+function parseWeightKg(value) {
+  if (value == null) return 0;
+  const text = String(value).toLowerCase().replace(/,/g, '.').trim();
+  const kg = text.match(/(\d+(?:\.\d+)?)\s*(?:kgs?|kilograms?)\b/);
+  if (kg) return parseFloat(kg[1]);
+  const g = text.match(/(\d+(?:\.\d+)?)\s*(?:g|gms?|grams?)\b/);
+  if (g) return parseFloat(g[1]) / 1000;
+  // A bare number is treated as kilograms (e.g. weight: "1")
+  if (/^\d+(?:\.\d+)?$/.test(text)) return parseFloat(text);
+  return 0;
+}
+
+/**
+ * Shipping is free at/above the threshold. Below it, every unit is charged by
+ * its own weight: under 1kg => ₹60, 1kg or more => ₹100.
+ */
+function calcShipping(subtotal, items = []) {
+  if (subtotal >= SHIPPING_THRESHOLD) return 0;
+  return items.reduce((sum, item) => {
+    const weightKg = item.weightKg ?? 0;
+    const perUnit = weightKg >= 1 ? HEAVY_ITEM_SHIPPING : LIGHT_ITEM_SHIPPING;
+    return sum + perUnit * (item.quantity || 1);
+  }, 0);
 }
 
 // @POST /api/orders  - user creates order after successful payment
@@ -38,6 +62,7 @@ router.post('/', protect, async (req, res) => {
       if (!product) return res.status(404).json({ message: `Product not found: ${it.product}` });
       if (product.stock < it.quantity) return res.status(400).json({ message: `Insufficient stock for ${product.name}` });
       const price = product.price;
+      const weight = product.weight || product.unit || '';
       subtotal += price * it.quantity;
       populatedItems.push({
         product: product._id,
@@ -45,10 +70,12 @@ router.post('/', protect, async (req, res) => {
         image: product.images?.[0] || '',
         price,
         quantity: it.quantity,
+        weight,
+        weightKg: parseWeightKg(weight),
       });
     }
 
-    const shippingCharge = calcShipping(subtotal);
+    const shippingCharge = calcShipping(subtotal, populatedItems);
 
     // Coupon discount — always re-validated server-side, never trusted from client
     let appliedCoupon = '';
@@ -334,11 +361,16 @@ router.post('/payment/razorpay/order', protect, async (req, res) => {
     if (!items || !items.length) return res.status(400).json({ message: 'No items' });
 
     let subtotal = 0;
+    const shippingItems = [];
     for (const it of items) {
       const product = await Product.findById(it.product);
       if (!product) return res.status(404).json({ message: `Product not found: ${it.product}` });
       if (product.stock < it.quantity) return res.status(400).json({ message: `Insufficient stock for ${product.name}` });
       subtotal += product.price * it.quantity;
+      shippingItems.push({
+        quantity: it.quantity,
+        weightKg: parseWeightKg(product.weight || product.unit),
+      });
     }
     let discountAmount = 0;
     if (couponCode && String(couponCode).trim()) {
@@ -348,7 +380,7 @@ router.post('/payment/razorpay/order', protect, async (req, res) => {
         return res.status(e.status || 400).json({ message: e.message });
       }
     }
-    const total = subtotal - discountAmount + calcShipping(subtotal);
+    const total = subtotal - discountAmount + calcShipping(subtotal, shippingItems);
 
     const rzOrder = await rzp.orders.create({
       amount: Math.round(total * 100), // paise

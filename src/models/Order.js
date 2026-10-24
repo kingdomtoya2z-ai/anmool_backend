@@ -31,6 +31,8 @@ const orderSchema = new mongoose.Schema(
         image: String,
         price: Number,
         quantity: { type: Number, required: true, min: 1 },
+        weight: { type: String, default: '' },
+        weightKg: { type: Number, default: 0 },
       },
     ],
     shippingAddress: {
