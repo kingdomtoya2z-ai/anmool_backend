@@ -46,12 +46,11 @@ router.post('/', protect, async (req, res) => {
   try {
     if (req.user.role === 'admin') return res.status(403).json({ message: 'Admin cannot place orders' });
 
-    const { items, shippingAddress, paymentMethod = 'online', paymentId = '', couponCode = '' } = req.body;
+    const { items, shippingAddress, paymentId = '', couponCode = '' } = req.body;
     if (!items || !items.length) return res.status(400).json({ message: 'No items' });
     if (!shippingAddress) return res.status(400).json({ message: 'Shipping address required' });
     // Online orders must carry a real verified Razorpay payment id (pay_…)
-    // — blocks fake/test ids from ever becoming 'paid' orders.
-    if (paymentMethod !== 'cod' && !/^pay_[A-Za-z0-9]+$/.test(paymentId)) {
+    if (!/^pay_[A-Za-z0-9]+$/.test(paymentId)) {
       return res.status(400).json({ message: 'Online payment verification required before placing the order' });
     }
 
@@ -91,7 +90,7 @@ router.post('/', protect, async (req, res) => {
     }
     const total = subtotal - discountAmount + shippingCharge;
 
-    const initialStatus = paymentMethod === 'cod' ? 'pending' : 'confirmed';
+    const initialStatus = 'confirmed';
     const orderNumber = await nextOrderNumber();
     const order = await Order.create({
       orderNumber,
@@ -103,15 +102,15 @@ router.post('/', protect, async (req, res) => {
       couponCode: appliedCoupon,
       discountAmount,
       total,
-      paymentMethod,
-      paymentStatus: paymentMethod === 'cod' ? 'pending' : 'paid',
+      paymentMethod: 'online',
+      paymentStatus: 'paid',
       paymentId,
       orderStatus: initialStatus,
       statusHistory: [
         {
           status: initialStatus,
           timestamp: new Date(),
-          note: paymentMethod === 'cod' ? 'Order placed (Cash on Delivery)' : 'Payment successful — order confirmed',
+          note: 'Payment successful — order confirmed',
         },
       ],
     });
@@ -140,7 +139,7 @@ router.post('/', protect, async (req, res) => {
       ${discountAmount ? `<p><strong>Coupon ${appliedCoupon}:</strong> −₹${discountAmount}</p>` : ''}
       <p><strong>Shipping:</strong> ₹${shippingCharge} ${shippingCharge ? `(Applied - order < ₹${SHIPPING_THRESHOLD})` : '(Free shipping)'}</p>
       <p><strong>Total Paid:</strong> ₹${total}</p>
-      <p><strong>Payment:</strong> ${paymentMethod} - ${order.paymentId || 'N/A'}</p>
+      <p><strong>Payment:</strong> online - ${order.paymentId || 'N/A'}</p>
     `;
     await sendEmail({
       to: adminEmail,
@@ -152,8 +151,8 @@ router.post('/', protect, async (req, res) => {
     // Also email customer confirmation (if configured)
     await sendEmail({
       to: req.user.email,
-      subject: `Your Anmool Order #${order.orderNumber} ${paymentMethod === 'cod' ? 'Placed' : 'Confirmed'}!`,
-      html: `<h2>Thank you for shopping with Anmool!</h2><p>Your order ${order.orderNumber} ${paymentMethod === 'cod' ? 'has been placed and will be confirmed after our team calls you.' : 'has been confirmed and is being processed.'}</p><p><a href="${process.env.FRONTEND_URL}/track-order?order=${order.orderNumber}">Track your order</a></p>${orderHtml}`,
+      subject: `Your Anmool Order #${order.orderNumber} Confirmed!`,
+      html: `<h2>Thank you for shopping with Anmool!</h2><p>Your order ${order.orderNumber} has been confirmed and is being processed.</p><p><a href="${process.env.FRONTEND_URL}/track-order?order=${order.orderNumber}">Track your order</a></p>${orderHtml}`,
       text: `Your order ${order.orderNumber} total ₹${total}. Track at /track-order`,
     });
 
@@ -186,7 +185,7 @@ router.get('/track/:number', async (req, res) => {
       subtotal: order.subtotal,
       shippingCharge: order.shippingCharge,
       total: order.total,
-      paymentMethod: order.paymentMethod,
+      paymentMethod: order.paymentMethod || 'online',
       paymentStatus: order.paymentStatus,
       orderStatus: order.orderStatus,
       statusHistory: order.statusHistory,

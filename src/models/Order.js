@@ -48,7 +48,7 @@ const orderSchema = new mongoose.Schema(
     couponCode: { type: String, default: '' },
     discountAmount: { type: Number, default: 0 },
     total: { type: Number, required: true },
-    paymentMethod: { type: String, enum: ['cod', 'online', 'razorpay', 'dummy'], default: 'online' },
+    paymentMethod: { type: String, enum: ['online', 'razorpay', 'dummy'], default: 'online' },
     paymentStatus: { type: String, enum: ['pending', 'paid', 'failed'], default: 'pending' },
     paymentId: { type: String, default: '' },
     orderStatus: {
