@@ -64,6 +64,11 @@ const orderSchema = new mongoose.Schema(
         note: { type: String, default: '' },
       },
     ],
+    // Courier details added by the admin after dispatch. The customer sees
+    // the consignment (AWB) number and a link to the courier's tracking page.
+    courierPartner: { type: String, default: '', trim: true },
+    consignmentId: { type: String, default: '', trim: true },
+    trackingUrl: { type: String, default: '', trim: true },
   },
   { timestamps: true }
 );

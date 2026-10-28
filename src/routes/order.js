@@ -189,6 +189,9 @@ router.get('/track/:number', async (req, res) => {
       paymentStatus: order.paymentStatus,
       orderStatus: order.orderStatus,
       statusHistory: order.statusHistory,
+      courierPartner: order.courierPartner || '',
+      consignmentId: order.consignmentId || '',
+      trackingUrl: order.trackingUrl || '',
       shippingAddress: {
         fullName: order.shippingAddress.fullName,
         city: order.shippingAddress.city,
@@ -249,7 +252,7 @@ router.get('/', protect, adminOnly, async (req, res) => {
     }
     if (search) {
       const s = search.trim();
-      const or = [{ orderNumber: new RegExp(s, 'i') }, { 'shippingAddress.phone': new RegExp(s, 'i') }, { 'shippingAddress.fullName': new RegExp(s, 'i') }, { 'shippingAddress.city': new RegExp(s, 'i') }];
+      const or = [{ orderNumber: new RegExp(s, 'i') }, { consignmentId: new RegExp(s, 'i') }, { courierPartner: new RegExp(s, 'i') }, { 'shippingAddress.phone': new RegExp(s, 'i') }, { 'shippingAddress.fullName': new RegExp(s, 'i') }, { 'shippingAddress.city': new RegExp(s, 'i') }];
       if (mongoose.Types.ObjectId.isValid(s)) or.push({ _id: s });
       filter.$or = or;
     }
@@ -326,6 +329,32 @@ router.put('/:id/status', protect, adminOnly, async (req, res) => {
       }).catch(() => {});
     }
 
+    res.json(updated);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// Admin: save the courier partner, consignment (AWB) number and the courier's
+// public tracking page. Customers see these on their orders and are sent to
+// the courier's site where they can enter the consignment id themselves.
+router.put('/:id/tracking', protect, adminOnly, async (req, res) => {
+  try {
+    const { courierPartner = '', consignmentId = '', trackingUrl = '' } = req.body;
+    const order = await Order.findById(req.params.id);
+    if (!order) return res.status(404).json({ message: 'Order not found' });
+
+    const cleanUrl = String(trackingUrl || '').trim();
+    if (cleanUrl && !/^https?:\/\/\S+$/i.test(cleanUrl)) {
+      return res.status(400).json({ message: 'Tracking URL must start with http:// or https://' });
+    }
+
+    order.courierPartner = String(courierPartner || '').trim().slice(0, 100);
+    order.consignmentId = String(consignmentId || '').trim().slice(0, 100);
+    order.trackingUrl = cleanUrl.slice(0, 1000);
+
+    await order.save();
+    const updated = await order.populate('user', 'name email phone');
     res.json(updated);
   } catch (err) {
     res.status(500).json({ message: err.message });
